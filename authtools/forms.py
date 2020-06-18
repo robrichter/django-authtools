@@ -1,6 +1,6 @@
 from __future__ import unicode_literals
 
-from django import forms, VERSION as DJANGO_VERSION
+from django import forms
 from django.forms.utils import flatatt
 from django.contrib.auth.forms import (
     ReadOnlyPasswordHashField, ReadOnlyPasswordHashWidget,
@@ -10,7 +10,7 @@ from django.contrib.auth.forms import (
 )
 from django.contrib.auth import get_user_model, password_validation
 from django.contrib.auth.hashers import identify_hasher, UNUSABLE_PASSWORD_PREFIX
-from django.utils.translation import ugettext_lazy as _, ugettext
+from django.utils.translation import gettext_lazy as _, gettext
 from django.utils.html import format_html
 
 User = get_user_model()
@@ -32,29 +32,21 @@ class BetterReadOnlyPasswordHashWidget(ReadOnlyPasswordHashWidget):
     A ReadOnlyPasswordHashWidget that has a less intimidating output.
     """
     def render(self, name, value, attrs=None, renderer=None):
-        final_attrs = flatatt(self.build_attrs(attrs or {}))
+        final_attrs = flatatt(self.build_attrs(attrs))
 
         if not value or not is_password_usable(value):
-            summary = ugettext("No password set.")
+            summary = gettext("No password set.")
         else:
             try:
                 identify_hasher(value)
             except ValueError:
-                summary = ugettext("Invalid password format or unknown"
+                summary = gettext("Invalid password format or unknown"
                                    " hashing algorithm.")
             else:
-                summary = ugettext('*************')
+                summary = gettext('*************')
 
         return format_html('<div{attrs}><strong>{summary}</strong></div>',
                            attrs=final_attrs, summary=summary)
-
-
-class UserChangeForm(DjangoUserChangeForm):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        password = self.fields.get('password')
-        if password:
-            password.widget = BetterReadOnlyPasswordHashWidget()
 
 
 class UserCreationForm(forms.ModelForm):
@@ -146,6 +138,40 @@ setattr(
 CaseInsensitiveEmailUserCreationForm = CaseInsensitiveUsernameFieldCreationForm
 
 
+class UserChangeForm(forms.ModelForm):
+    """
+    A form for updating users. Includes all the fields on
+    the user, but replaces the password field with admin's
+    password hash display field.
+    """
+    password = ReadOnlyPasswordHashField(label=_("Password"),
+        widget=BetterReadOnlyPasswordHashWidget)
+
+    class Meta:
+        model = User
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super(UserChangeForm, self).__init__(*args, **kwargs)
+        f = self.fields.get('user_permissions', None)
+        if f is not None:
+            f.queryset = f.queryset.select_related('content_type')
+
+    def clean_password(self):
+        # Regardless of what the user provides, return the initial value.
+        # This is done here, rather than on the field, because the
+        # field does not have access to the initial value
+        return self.initial["password"]
+
+
+class AdminUserChangeForm(UserChangeForm):
+    def __init__(self, *args, **kwargs):
+        super(AdminUserChangeForm, self).__init__(*args, **kwargs)
+        if not self.fields['password'].help_text:
+            self.fields['password'].help_text = \
+                DjangoUserChangeForm.base_fields['password'].help_text
+
+
 class FriendlyPasswordResetForm(OldPasswordResetForm):
     error_messages = dict(getattr(OldPasswordResetForm, 'error_messages', {}))
     error_messages['unknown'] = _("This email address doesn't have an "
@@ -177,3 +203,4 @@ class AuthenticationForm(DjangoAuthenticationForm):
         super(AuthenticationForm, self).__init__(request, *args, **kwargs)
         username_field = User._meta.get_field(User.USERNAME_FIELD)
         self.fields['username'].widget = username_field.formfield().widget
+
